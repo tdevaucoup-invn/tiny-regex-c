@@ -34,11 +34,11 @@
 
 /* Definitions: */
 
-#define MAX_REGEXP_OBJECTS      30    /* Max number of regex symbols in expression. */
+#define MAX_REGEXP_OBJECTS      60    /* Max number of regex symbols in expression. */
 #define MAX_CHAR_CLASS_LEN      40    /* Max length of character-class buffer in.   */
 
 
-enum { UNUSED, DOT, BEGIN, END, QUESTIONMARK, STAR, PLUS, CHAR, CHAR_CLASS, INV_CHAR_CLASS, DIGIT, NOT_DIGIT, ALPHA, NOT_ALPHA, WHITESPACE, NOT_WHITESPACE, /* BRANCH */ };
+enum { UNUSED, DOT, BEGIN, END, QUESTIONMARK, STAR, PLUS, CHAR, CHAR_CLASS, INV_CHAR_CLASS, DIGIT, NOT_DIGIT, ALPHA, NOT_ALPHA, WHITESPACE, NOT_WHITESPACE, START_POSITIVE_LOOKAHEAD, END_LOOKAROUND /* BRANCH */ };
 
 typedef struct regex_t
 {
@@ -88,12 +88,12 @@ int re_matchp(re_t pattern, const char* text)
       do
       {
         idx += 1;
-        
+
         if (matchpattern(pattern, text))
         {
           if (text[0] == '\0')
             return -1;
-        
+
           return idx;
         }
       }
@@ -149,18 +149,14 @@ re_t re_compile(const char* pattern)
             case 's': {    re_compiled[j].type = WHITESPACE;       } break;
             case 'S': {    re_compiled[j].type = NOT_WHITESPACE;   } break;
 
-            /* Escaped character, e.g. '.' or '$' */ 
-            default:  
-            {
-              re_compiled[j].type = CHAR;
-              re_compiled[j].ch = pattern[i];
-            } break;
+            /* Escaped character, e.g. '.' or '$' */
+            default: { goto default_main_switch; }
           }
         }
         /* '\\' as last char in pattern -> invalid regular expression. */
 /*
         else
-        { 
+        {
           re_compiled[j].type = CHAR;
           re_compiled[j].ch = pattern[i];
         }
@@ -178,7 +174,7 @@ re_t re_compile(const char* pattern)
         {
           re_compiled[j].type = INV_CHAR_CLASS;
           i += 1; /* Increment i to avoid including '^' in the char-buffer */
-        }  
+        }
         else
         {
           re_compiled[j].type = CHAR_CLASS;
@@ -215,9 +211,37 @@ re_t re_compile(const char* pattern)
         re_compiled[j].ccl = &ccl_buf[buf_begin];
       } break;
 
+      /* bracket start */
+      case '(':
+      {
+          if (pattern[i+1] != '\0')
+          {
+              i += 1;
+              switch (pattern[i]) // can be also capture group for later
+              {
+                  case '?':
+                  if (pattern[i+1] != '\0')
+                  {
+                      i += 1;
+                      switch (pattern[i]) // can be also capture group for later
+                      {
+                          case '=': { re_compiled[j].type = START_POSITIVE_LOOKAHEAD; } break;
+                          default:  { return 0; } // error (? must be follow by something
+                      }
+                  } break;
+
+                  default: { goto default_main_switch; }
+              }
+          }
+      } break;
+
+       /* bracket end */
+       case ')': { re_compiled[j].type = END_LOOKAROUND; } break;
+
       /* Other characters: */
       default:
       {
+default_main_switch:
         re_compiled[j].type = CHAR;
         re_compiled[j].ch = c;
       } break;
@@ -233,7 +257,7 @@ re_t re_compile(const char* pattern)
 
 void re_print(regex_t* pattern)
 {
-  const char* types[] = { "UNUSED", "DOT", "BEGIN", "END", "QUESTIONMARK", "STAR", "PLUS", "CHAR", "CHAR_CLASS", "INV_CHAR_CLASS", "DIGIT", "NOT_DIGIT", "ALPHA", "NOT_ALPHA", "WHITESPACE", "NOT_WHITESPACE", "BRANCH" };
+  const char* types[] = { "UNUSED", "DOT", "BEGIN", "END", "QUESTIONMARK", "STAR", "PLUS", "CHAR", "CHAR_CLASS", "INV_CHAR_CLASS", "DIGIT", "NOT_DIGIT", "ALPHA", "NOT_ALPHA", "WHITESPACE", "NOT_WHITESPACE", "START_POSITIVE_LOOKAHEAD", "END_LOOKAROUND", "BRANCH" };
 
   int i;
   int j;
@@ -327,7 +351,7 @@ static int matchcharclass(char c, const char* str)
       if (matchmetachar(c, str))
       {
         return 1;
-      } 
+      }
       else if ((c == str[0]) && !ismetachar(c))
       {
         return 1;
@@ -426,6 +450,10 @@ static int matchpattern(regex_t* pattern, const char* text)
   {
     return matchpattern(&pattern[1], text+1);
   }
+  else if ((pattern[0].type == START_POSITIVE_LOOKAHEAD) || (pattern[0].type == END_LOOKAROUND))
+  {
+    return matchpattern(&pattern[1], text);
+  }
   else
   {
     return 0;
@@ -437,6 +465,7 @@ static int matchpattern(regex_t* pattern, const char* text)
 /* Iterative matching */
 static int matchpattern(regex_t* pattern, const char* text)
 {
+  int hasMatchOne = 0;
   do
   {
     if ((pattern[0].type == UNUSED) || (pattern[1].type == QUESTIONMARK))
@@ -455,6 +484,13 @@ static int matchpattern(regex_t* pattern, const char* text)
     {
       return (text[0] == '\0');
     }
+    else if ((pattern[0].type == START_POSITIVE_LOOKAHEAD) || (pattern[0].type == END_LOOKAROUND))
+    {
+      hasMatchOne = matchone(*pattern++, *text);
+    } else {
+      hasMatchOne = matchone(*pattern++, *text++);
+    }
+
 /*  Branching is not working properly
     else if (pattern[1].type == BRANCH)
     {
@@ -462,7 +498,7 @@ static int matchpattern(regex_t* pattern, const char* text)
     }
 */
   }
-  while ((text[0] != '\0') && matchone(*pattern++, *text++));
+  while ((text[0] != '\0') && hasMatchOne);
 
   return 0;
 }
